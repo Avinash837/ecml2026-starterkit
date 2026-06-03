@@ -189,15 +189,22 @@ class Topology:
                 return None
         return path
 
-    def k_routes(self, start_cell, start_dir, target_cells, K=3, pw=0.5, max_ratio=1.3):
+    def k_routes(self, start_cell, start_dir, target_cells, K=3, pw=0.5, max_ratio=1.3,
+                 load=None, lw=0.0, dir_load=None, dw=0.0):
         """Up to K DIVERSE shortest-ish routes via penalized Dijkstra on the directed cell
         graph: after each route, add a cost penalty to the cells it used so the next route
         prefers different corridors. Cheap (~ms; graph is small) -- the scalable replacement
-        for flatland's get_k_shortest_paths (~3.5s/agent). Returns list of (cell,dir) paths."""
+        for flatland's get_k_shortest_paths (~3.5s/agent). Returns list of (cell,dir) paths.
+
+        load/lw: CONGESTION-AWARE routing. `load[cell]` = how many already-planned trains use
+        that cell; cost gets `lw*load[cell]` so trains spread off congested corridors (e.g. the
+        central hub) onto parallel/peripheral routes -> higher completion at high density."""
         target_cells = {tuple(t) for t in target_cells}
         start = (tuple(start_cell), int(start_dir))
         if start not in self.succ:
             return []
+        load = load or {}
+        dir_load = dir_load or {}        # {(cell,dir): #committed traversals}; penalize OPPOSING
         penalties = {}
         routes = []
         seen = set()
@@ -214,7 +221,9 @@ class Topology:
                     goal = node
                     break
                 for nb in self.succ.get(node, ()):
-                    nd = d + 1.0 + pw * penalties.get(nb[0], 0)
+                    opp = dir_load.get((nb[0], (nb[1] + 2) % 4), 0)   # traffic the OTHER way here
+                    nd = d + 1.0 + pw * penalties.get(nb[0], 0) + lw * load.get(nb[0], 0) \
+                        + dw * opp
                     if nd < dist.get(nb, np.inf):
                         dist[nb] = nd
                         prev[nb] = node

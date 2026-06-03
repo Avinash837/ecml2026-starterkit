@@ -62,6 +62,13 @@ def make_env(level, scenario, seed, map_cfg=None):
     if interval > 0:
         kwargs.update(malfunction_interval=interval,
                       malfunction_duration_min=dmin, malfunction_duration_max=dmax)
+    else:
+        # BUG FIX: env_generator DEFAULTS to malfunction_interval=540, so NOT passing it added
+        # malfunctions to the malfunction-free levels (0-2) too -- contaminating every local
+        # baseline (it ~halves completion: big200 42%->22%). Disable explicitly so levels 0-2
+        # match the real competition (which has no malfunctions there).
+        kwargs.update(malfunction_interval=10 ** 9,
+                      malfunction_duration_min=0, malfunction_duration_max=0)
     env, _, _ = env_generator(**kwargs)
     return env
 

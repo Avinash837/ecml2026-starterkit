@@ -13,7 +13,10 @@ from flatland.envs.rail_env_policy import RailEnvPolicy
 from flatland.envs.rail_env_action import RailEnvActions
 
 from submission.dispatcher import V5Planner
-from submission.priority import load_priority_fn
+# NOTE: do NOT import submission.priority here -- it imports torch, which is NOT in the
+# container (requirements.txt ships only flatland-rl). Importing it crashed the policy load
+# in the competition runner (the cause of the first two failed submissions). fast-first needs
+# no trained net, so there's no torch dependency.
 
 
 def fast_first_priority(env, topo, h):
@@ -37,11 +40,7 @@ class MyPolicy(RailEnvPolicy):
         #   opposite (slow/long-distance first) is catastrophic (-16pp), confirming the mechanism.
         #   (signal_guard / load_weight looked good on proxies but collapsed under real-map 6-seed
         #   testing; fast-first is the one lever that held up.)
-        self._planner.priority_fn = fast_first_priority   # module-level fn (picklable!)
-        # A trained priority net, if shipped, overrides the heuristic.
-        fn = load_priority_fn()
-        if fn is not None:
-            self._planner.priority_fn = fn
+        self._planner.priority_fn = fast_first_priority   # module-level fn (picklable, no torch)
 
     def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
         env = observations[0]            # MyObservationBuilder hands us the live RailEnv

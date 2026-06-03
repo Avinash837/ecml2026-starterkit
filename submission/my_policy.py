@@ -16,6 +16,14 @@ from submission.dispatcher import V5Planner
 from submission.priority import load_priority_fn
 
 
+def fast_first_priority(env, topo, h):
+    """Planning/release order: faster trains first (they clear the network and free capacity).
+    MUST be a module-level function (NOT a lambda/closure): the competition runner PICKLES the
+    policy, and a lambda is unpicklable -> the job fails to start. Validated +4-7pp on clean
+    levels (real-map, 6 seeds), neutral on malfunction levels."""
+    return -float(env.agents[h].speed_counter.speed)
+
+
 class MyPolicy(RailEnvPolicy):
     def __init__(self):
         super().__init__()
@@ -29,7 +37,7 @@ class MyPolicy(RailEnvPolicy):
         #   opposite (slow/long-distance first) is catastrophic (-16pp), confirming the mechanism.
         #   (signal_guard / load_weight looked good on proxies but collapsed under real-map 6-seed
         #   testing; fast-first is the one lever that held up.)
-        self._planner.priority_fn = lambda env, topo, h: -float(env.agents[h].speed_counter.speed)
+        self._planner.priority_fn = fast_first_priority   # module-level fn (picklable!)
         # A trained priority net, if shipped, overrides the heuristic.
         fn = load_priority_fn()
         if fn is not None:

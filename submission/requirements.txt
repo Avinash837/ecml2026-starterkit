@@ -1,5 +1,3 @@
-# HERE: add your pip dependencies here
-
-
-# flatland-rl @ git+https://github.com/flatland-association/flatland-rl.git@main
+# Pinned to the competition base image (flatland-baselines:v4.2.5) so pip does
+# not upgrade flatland inside the container. The policy needs no other deps.
 flatland-rl==4.2.5

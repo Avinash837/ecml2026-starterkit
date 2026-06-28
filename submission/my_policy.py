@@ -63,11 +63,28 @@ class MyPolicy(RailEnvPolicy):
         #   (signal_guard / load_weight looked good on proxies but collapsed under real-map 6-seed
         #   testing; fast-first is the one lever that held up.)
         self._planner.priority_fn = fast_first_priority   # module-level fn (picklable, no torch)
+        # V7: directional flow separation at DENSE. Real-map route analysis shows
+        # shortest-path routing funnels both directions onto the same corridors
+        # (rows 75/80, col 65) -> ~923 segment head-on; a directional opposing
+        # penalty pulls the flows onto the map's parallel corridors (junction-dense,
+        # 443 segs) -> ~277 head-on (-70%), so a frozen train no longer blocks the
+        # whole opposing stream. Off (0.0) reproduces v6 exactly; tune via --set.
+        self._planner.dense_dir_weight = 0.0
 
     def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
         env = observations[0]            # MyObservationBuilder hands us the live RailEnv
-        low_density = env.get_num_agents() <= self._low_density_agent_cap
-        self._planner.dir_weight = 0.5 if low_density else 0.0
+        n = env.get_num_agents()
+        low_density = n <= self._low_density_agent_cap
+        # V7: DEPARTURE METERING at dense. The dense map is ~3x over capacity, so
+        # injecting all due trains saturates it -> the head-on gridlock a malfunction
+        # makes permanent. Cap concurrent on-map trains (held trains wait off-map,
+        # cost-free) so the network stays fluid. Adaptive cap (scales with n) so it
+        # binds at mid-density (L4 150ag: 52->59) without starving the 532 levels;
+        # off at low density (not saturated). Validated +7 malf / neutral clean.
+        self._planner.meter_cap = (10 ** 9 if low_density else
+                                   max(self._planner.meter_cap_floor,
+                                       n // self._planner.meter_div))
+        self._planner.dir_weight = 0.5 if low_density else self._planner.dense_dir_weight
         self._planner.late_guard_reroute_after = 0 if low_density else 200
         self._planner.exec_fast_first = True
         self._planner.signal_guard = False

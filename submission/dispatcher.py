@@ -129,6 +129,16 @@ class V5Planner:
         # never modified -> preserves deadlock-free-by-construction; differs from the online
         # replan that re-dispatched everyone and thrashed). 0 = off. ---
         self.release_interval = 0
+        # --- DEPARTURE METERING (admission control): the dense map is ~3x over capacity, so
+        # injecting all due trains saturates the network -> head-on gridlock that one malfunction
+        # turns permanent (release_interval ADDING trains made it strictly worse). Cap CONCURRENT
+        # on-map trains at meter_cap; hold the rest off-map (cost-free, they just wait at the
+        # depot) and admit them in waves as the network drains. meter_max_hold bounds the hold so
+        # a train is never delayed past its own deadline. meter_cap=1e9 = off (v6 behavior). ---
+        self.meter_cap = 10 ** 9
+        self.meter_max_hold = 600
+        self.meter_cap_floor = 35    # adaptive: my_policy sets meter_cap = max(floor, n//div)
+        self.meter_div = 4           # so a fixed cap can't starve the 532-agent levels
         # --- SIGNAL GUARD (home signal at the last crossing): never admit a train ONTO a
         # junction unless the cell BEYOND it (its planned exit) is also clear. Prevents the
         # junction-rest deadlock (train stuck ON a switch, blocking the queue that would clear
@@ -1009,6 +1019,8 @@ class V5Planner:
 
         # each train wants its next planned cell once its scheduled move time is reached
         desired = {}
+        admitted = 0                 # new departures admitted this step (metering)
+        n_onmap = len(cur_cell)      # trains currently on the map
         for h in handles:
             a = ag[h]
             plan = self.plans.get(h)
@@ -1017,8 +1029,11 @@ class V5Planner:
             if getattr(a.malfunction_handler, "malfunction_down_counter", 0) > 0:
                 continue
             if a.position is None:
-                if t >= plan[0][2]:                      # earliest_departure reached
+                if t >= plan[0][2] and (                 # earliest_departure reached AND
+                        n_onmap + admitted < self.meter_cap         # under the on-map cap, OR
+                        or t - plan[0][2] >= self.meter_max_hold):  # held long enough (deadline)
                     desired[h] = plan[0][0]
+                    admitted += 1
             else:
                 cp = cur_cell[h]
                 i = self.ptr.get(h, 0)

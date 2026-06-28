@@ -88,12 +88,19 @@ class V5Planner:
         # off congested corridors (the main reason v2's k-paths beat single-route v5).
         self.multistop = multistop
         self.K = K
+        # V6: collect intermediate-stop credit only when it is already on the
+        # direct route. Keep this low-density so one-step dwell does not disturb
+        # the dense completion-first behavior that made V5 stable.
+        self.opportunistic_stops = True
+        self.opportunistic_stop_agent_cap = 60
         # buf: extra following-spacing steps per cell. Tested 0 vs 1 -> no difference at high
         # density (the wall is the prioritized planner, not packing), so keep 0 (max throughput).
         self.buf = 0
         self.topo = None
         self.plans = {}        # h -> [(cell, dir, enter_t, depart_t), ...] or None
         self.ptr = {}
+        self.stop_at = {}      # h -> plan indices where one explicit STOP is required
+        self.stopped_at = {}   # h -> stop indices already emitted as STOP_MOVING
         self.kpaths = {}
         self.ready = False
         self.max_wait = max_wait
@@ -251,7 +258,47 @@ class V5Planner:
             routes = self.topo.k_routes(sp, sd, {tuple(a.target)}, K=self.K,
                                         load=load, lw=lw,
                                         dir_load=self.dir_load, dw=self.dir_weight)
-        return [(r, set()) for r in routes]
+        return [(r, self._opportunistic_stop_set(env, h, r)) for r in routes]
+
+    def _opportunistic_stop_set(self, env, h, route):
+        """Path indices where V6 can dwell without changing the V5 route.
+
+        This preserves V5's completion-first path choice. If a train's direct
+        route naturally passes an intermediate timetable platform in order, add
+        the one-step dwell that ECML rewards as a served stop.
+        """
+        if not self.opportunistic_stops:
+            return set()
+        if env.get_num_agents() > self.opportunistic_stop_agent_cap:
+            return set()
+        a = env.agents[h]
+        if len(a.waypoints) <= 2 or not route:
+            return set()
+
+        stop_set = set()
+        search_from = 1
+        final_gi = len(a.waypoints) - 1
+        for gi in range(1, final_gi):
+            goal_states = {
+                (tuple(w.position), int(w.direction))
+                for w in a.waypoints[gi]
+                if getattr(w, "direction", None) is not None
+            }
+            goal_cells = {tuple(w.position) for w in a.waypoints[gi]}
+            found = None
+            for idx in range(search_from, len(route) - 1):
+                cell, direction = route[idx]
+                if goal_states:
+                    matched = (cell, int(direction)) in goal_states
+                else:
+                    matched = cell in goal_cells
+                if matched:
+                    found = idx
+                    break
+            if found is not None:
+                stop_set.add(found)
+                search_from = found + 1
+        return stop_set
 
     def _compute_criticality(self, env):
         """{cell: blast_radius} for the busiest single-track blocks. blast_radius(seg) =
@@ -326,6 +373,8 @@ class V5Planner:
         cands = self._candidate_routes(env, h)
         if not cands:
             self.plans[h] = None
+            self.stop_at[h] = set()
+            self.stopped_at[h] = set()
             return
         k = _kof(a)
         horizon = env._max_episode_steps
@@ -339,7 +388,7 @@ class V5Planner:
         # nobody, while a parked train jams the corridor and cascades stalls onto others.
         # On-map trains can't delay (they're already moving), so only off-map trains stagger.
         delays = [0, 30, 60, 120, 240, 480, 960] if not on_map else [0]
-        best = None  # (reached, -arrival/-progress, plan, adds, parks, last_cell, last_enter)
+        best = None  # (score, plan, adds, parks, last_cell, last_enter, stop_set)
         for route, stop_set in cands:
             for dl in delays:
                 t0 = base + dl
@@ -347,7 +396,7 @@ class V5Planner:
                     break
                 plan, adds, reached, lc, le = self._build(route, stop_set, t0, k, res, horizon)
                 score = (reached, -plan[-1][2] if reached else len(plan) - 10 ** 6)
-                cand = (score, plan, adds, not reached, lc, le)
+                cand = (score, plan, adds, not reached, lc, le, set(stop_set))
                 if best is None or score > best[0]:
                     best = cand
                 if reached:
@@ -355,13 +404,15 @@ class V5Planner:
             if best is not None and best[0][0]:
                 break              # a route completed; take it
 
-        _, plan, adds, parks, last_cell, last_enter = best
+        _, plan, adds, parks, last_cell, last_enter, chosen_stops = best
         if parks and self.abandon_unplaceable and not on_map:
             # Can't complete and still at the depot: keep it OFF-MAP (no plan -> never departs).
             # At high density a train parked mid-map jams a corridor and cascades stalls onto
             # trains that COULD complete; an undeparted train blocks nobody. (On-map trains
             # can't be abandoned -- they're already out there -- so they keep their best plan.)
             self.plans[h] = None
+            self.stop_at[h] = set()
+            self.stopped_at[h] = set()
             return
         if parks and last_enter <= horizon:
             adds = adds + [("C", last_cell, last_enter, horizon + k)]
@@ -372,6 +423,8 @@ class V5Planner:
                 res.add_edge(it[1], it[2], it[3], it[4])
         self.plans[h] = plan
         self.ptr[h] = 0
+        self.stop_at[h] = {i for i in chosen_stops if 0 < i < len(plan) - 1}
+        self.stopped_at[h] = set()
         for (cell, d, et, dt) in plan:                # register this train's corridor usage
             self.corridor_load[cell] = self.corridor_load.get(cell, 0) + 1
             self.dir_load[(cell, d)] = self.dir_load.get((cell, d), 0) + 1   # directional usage
@@ -431,6 +484,8 @@ class V5Planner:
                 nbhd.add(rng.choice(active))
             saved = {h: self.plans.get(h) for h in nbhd}
             saved_ptr = {h: self.ptr.get(h) for h in nbhd}
+            saved_stop_at = {h: set(self.stop_at.get(h, ())) for h in nbhd}
+            saved_stopped_at = {h: set(self.stopped_at.get(h, ())) for h in nbhd}
             res = self._build_res_excluding(env, t_now, nbhd)
             order = list(nbhd)
             rng.shuffle(order)                      # a fresh priority order for the subset
@@ -442,6 +497,8 @@ class V5Planner:
             else:
                 for h in nbhd:                      # revert
                     self.plans[h] = saved[h]
+                    self.stop_at[h] = saved_stop_at[h]
+                    self.stopped_at[h] = saved_stopped_at[h]
                     if saved_ptr[h] is not None:
                         self.ptr[h] = saved_ptr[h]
 
@@ -470,9 +527,13 @@ class V5Planner:
             res.add_cell(cell, t0, t1)
         self.plans = {}
         self.ptr = {}
+        self.stop_at = {}
+        self.stopped_at = {}
         for h in self._order(env):
             if env.agents[h].state == TrainState.DONE:
                 self.plans[h] = None
+                self.stop_at[h] = set()
+                self.stopped_at[h] = set()
                 continue
             self._schedule(env, h, res, t_now=t_now)
         if self.lns_iters > 0:
@@ -549,6 +610,8 @@ class V5Planner:
                 self.plans[h] = [(route[j][0], route[j][1], t + j * k, t + j * k + k)
                                  for j in range(len(route))]
                 self.ptr[h] = 0
+                self.stop_at[h] = set()
+                self.stopped_at[h] = set()
                 desired[h] = rn
                 self.frozen_reroutes[h] = self.frozen_reroutes.get(h, 0) + 1
                 break
@@ -586,6 +649,8 @@ class V5Planner:
                 self.plans[h] = [(route[j][0], route[j][1], t + j * k, t + j * k + k)
                                  for j in range(len(route))]
                 self.ptr[h] = 0
+                self.stop_at[h] = set()
+                self.stopped_at[h] = set()
                 desired[h] = rn
                 self.meet_pass_reroutes[h] = self.meet_pass_reroutes.get(h, 0) + 1
                 break
@@ -610,11 +675,15 @@ class V5Planner:
             self._reserve_plan(res, plan, _kof(env.agents[h]))
         for h in cand:
             old = self.plans.get(h)
+            old_stop_at = set(self.stop_at.get(h, ()))
+            old_stopped_at = set(self.stopped_at.get(h, ()))
             self._schedule(env, h, res, t_now=t_now)   # re-route from current pos vs the rest
             if self.plans.get(h):
                 self.stuck[h] = 0
             else:
                 self.plans[h] = old                     # replan abandoned it -> keep old plan
+                self.stop_at[h] = old_stop_at
+                self.stopped_at[h] = old_stopped_at
 
     def _release(self, env, t_now):
         """Release valve: try to schedule the never-departed (off-map, plan=None) trains into
@@ -721,6 +790,8 @@ class V5Planner:
             self.plans[h] = [(route[j][0], route[j][1], t + j * k, t + j * k + k)
                              for j in range(len(route))]
             self.ptr[h] = 0
+            self.stop_at[h] = set()
+            self.stopped_at[h] = set()
             return True
         return False
 
@@ -762,6 +833,9 @@ class V5Planner:
                 while i + 1 < len(plan) and plan[i][0] != cp:
                     i += 1
                 self.ptr[h] = i
+                if i in self.stop_at.get(h, set()) \
+                        and i not in self.stopped_at.get(h, set()):
+                    continue
                 if i + 1 < len(plan) and (self.greedy_advance or t >= plan[i][3] - _kof(a)):
                     desired[h] = plan[i + 1][0]               # scheduled time, or greedy (reactive)
 
@@ -795,6 +869,9 @@ class V5Planner:
                         cp = cur_cell[h]; i = self.ptr.get(h, 0)
                         while i + 1 < len(plan) and plan[i][0] != cp: i += 1
                         self.ptr[h] = i
+                        if i in self.stop_at.get(h, set()) \
+                                and i not in self.stopped_at.get(h, set()):
+                            continue
                         if i + 1 < len(plan) and t >= plan[i][3] - _kof(a):
                             desired[h] = plan[i + 1][0]
         if self.frozen_reroute:
@@ -878,7 +955,14 @@ class V5Planner:
                     d = int(a.direction) if a.direction is not None else int(a.initial_direction)
                     actions[h] = self._action_to(env, cur_cell[h], d, granted[h])
             else:
-                actions[h] = STOP if a.position is not None else DO
+                if a.position is not None:
+                    i = self.ptr.get(h)
+                    if i in self.stop_at.get(h, set()) \
+                            and i not in self.stopped_at.get(h, set()):
+                        self.stopped_at.setdefault(h, set()).add(i)
+                    actions[h] = STOP
+                else:
+                    actions[h] = DO
 
         # --- switch-level repair: a train sitting AT A SWITCH whose chosen branch is blocked
         # by a STOPPED/MALFUNCTIONING train ahead diverts onto a clear alternate branch toward

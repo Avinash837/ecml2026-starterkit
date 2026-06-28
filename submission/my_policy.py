@@ -1,5 +1,6 @@
 """
-Competition policy = the deadlock-free reservation dispatcher (submission.dispatcher).
+Competition policy = the V6 deadlock-free reservation dispatcher
+(submission.dispatcher).
 
 The evaluation runner calls `act_many(handles, observations=list(observations.values()))`
 every step. Our MyObservationBuilder returns the live RailEnv as each agent's observation,
@@ -31,6 +32,15 @@ class MyPolicy(RailEnvPolicy):
     def __init__(self):
         super().__init__()
         self._planner = V5Planner()
+        # V6 keeps V5's direct completion-first routing, but collects
+        # low-density intermediate stops that already lie on the chosen route.
+        self._planner.opportunistic_stops = True
+        self._planner.opportunistic_stop_agent_cap = 60
+        # V6 throughput gate: directional corridor load helps low-density
+        # maps but hurts dense maps, so act_many gates that by agent count.
+        # Fast dynamic release stayed broadly positive on the local proxies
+        # and is enabled for every density.
+        self._low_density_agent_cap = 60
         # FAST-FIRST planning order: plan/release FAST trains first. They clear the network
         # quickly and free track capacity, so more trains finish before the (tight) horizon.
         # Validated on the RECONSTRUCTED REAL competition map, 6 seeds x 4 conditions:
@@ -44,6 +54,10 @@ class MyPolicy(RailEnvPolicy):
 
     def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
         env = observations[0]            # MyObservationBuilder hands us the live RailEnv
+        low_density = env.get_num_agents() <= self._low_density_agent_cap
+        self._planner.dir_weight = 0.5 if low_density else 0.0
+        self._planner.exec_fast_first = True
+        self._planner.signal_guard = False
         # NOTE: signal_guard / block_lock / crit_weight / greedy_advance / release_interval are
         # all available on the planner but kept OFF -- verification showed signal_guard is only
         # net-positive on SMALL malfunction scenes and slightly negative on dense ones, so it is

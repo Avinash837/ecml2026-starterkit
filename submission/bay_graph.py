@@ -91,6 +91,13 @@ class ParallelGroup:
 
 class BayGraph:
     _cache = {}
+    # BOUND the cross-map cache: over a multi-level eval run the orchestrator
+    # feeds many different maps to ONE long-lived process. An unbounded cache
+    # would hold a full bay-graph per map and grow without limit -> the
+    # container bloats and gets OOM-killed at a level boundary (uncatchable, no
+    # score). The real competition map is FIXED -> 1 entry, always reused; a
+    # changing map set stays capped here. Keep just the most-recent few.
+    _CACHE_MAX = 2
 
     def __new__(cls, env):
         fp = _fingerprint(env.rail)
@@ -101,6 +108,8 @@ class BayGraph:
         self = super().__new__(cls)
         self._fp = fp
         self._build(env)
+        while len(cls._cache) >= cls._CACHE_MAX:   # FIFO-evict stale maps
+            cls._cache.pop(next(iter(cls._cache)))
         cls._cache[fp] = self
         return self
 

@@ -666,6 +666,7 @@ class LayerVariantPolicy(RailEnvPolicy):
         self._env_id = None
         self._step_seen = None
         self._actions: Dict[int, RailEnvActions] = {}
+        self._dead = False        # fail-safe latch (see act_many)
 
     def _ensure_controller(self, env):
         fresh = (self._ctl is None or self._env_id != id(env)
@@ -678,14 +679,30 @@ class LayerVariantPolicy(RailEnvPolicy):
 
     def act_many(self, handles: List[int], observations: List[Any],
                  **kwargs) -> Dict[int, RailEnvActions]:
-        env = observations[0]
-        self._ensure_controller(env)
-        step = env._elapsed_steps
-        if step != self._step_seen:
-            self._actions = self._ctl.act()
-            self._step_seen = step
-        return {h: self._actions.get(h, RailEnvActions.DO_NOTHING)
-                for h in handles}
+        # FAIL-SAFE: never let an exception escape into the eval runner -- an
+        # uncaught error there turns the ENTIRE submission into a generic
+        # "General failure" (zero score, no signal). On any error we dump the
+        # traceback to stderr (which surfaces in the competition eval log, so we
+        # learn the exact cause) and idle the trains instead of crashing.
+        if self._dead:
+            return {h: RailEnvActions.DO_NOTHING for h in handles}
+        try:
+            env = observations[0]
+            self._ensure_controller(env)
+            step = env._elapsed_steps
+            if step != self._step_seen:
+                self._actions = self._ctl.act()
+                self._step_seen = step
+            return {h: self._actions.get(h, RailEnvActions.DO_NOTHING)
+                    for h in handles}
+        except Exception:
+            import sys, traceback
+            sys.stderr.write(
+                "=== SUBMISSION act_many FAILED (fail-safe -> DO_NOTHING) ===\n")
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
+            self._dead = True     # stop retrying: no log spam, no repeated plan
+            return {h: RailEnvActions.DO_NOTHING for h in handles}
 
     def act(self, observation: Any, **kwargs) -> RailEnvActions:
         return RailEnvActions.DO_NOTHING

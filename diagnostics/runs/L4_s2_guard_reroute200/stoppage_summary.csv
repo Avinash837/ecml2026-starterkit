@@ -1,0 +1,14 @@
+reason,agent_steps,unique_agents,final_unfinished_agents
+offmap_wait_departure,207971,125,0
+offmap_no_plan,129166,25,22
+blocked_by_stopped_train,126829,55,36
+malfunction_off_map,34865,140,3
+malfunction_on_map,23172,98,13
+held_by_late_guard,23146,14,6
+blocked_by_adjacent_swap,21416,11,6
+timetable_wait,19158,6,4
+blocked_by_malfunction_train,13550,59,6
+offmap_ready_no_command,4996,3,2
+blocked_by_ungranted_train,210,33,0
+blocked_by_occupied_next,154,25,0
+blocked_by_claimed_cell,17,9,0

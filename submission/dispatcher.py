@@ -220,6 +220,11 @@ class V5Planner:
         self.late_guard_threshold = 30
         self.late_guard_release_after = 0
         self.late_guard_wait = {}
+        self.late_guard_reroute_after = 0
+        self.late_guard_reroutes = {}
+        self.late_guard_next_reroute = {}
+        self.late_guard_reroute_cooldown = 100
+        self.max_late_guard_reroutes = 2
         self.debug_counts = {}
         self.collect_diagnostics = False
         self.last_diag = {}
@@ -535,6 +540,9 @@ class V5Planner:
         self.dir_load = {}             # (cell,dir) -> #planned trains traversing it that way
         self.meet_pass_reroutes = {}   # h -> #reactive meet-pass diversions (capped)
         self.frozen_reroutes = {}      # h -> #frozen-corridor diversions (capped)
+        self.late_guard_wait = {}
+        self.late_guard_reroutes = {}
+        self.late_guard_next_reroute = {}
         # density-adaptive: abandon unplaceable trains off-map only when crowded
         n = env.get_num_agents()
         self.abandon_unplaceable = (n > 60) if self._abandon_cfg is None else self._abandon_cfg
@@ -659,19 +667,30 @@ class V5Planner:
             din = self._dir_between(hp, nx)
             my_exit = self._seg_exit(nx, din) if din is not None else None
             if my_exit != late_lock[s]:
-                if self.late_guard_release_after:
+                if self.late_guard_release_after or self.late_guard_reroute_after:
                     wait = self.late_guard_wait.get(h, 0) + 1
                     self.late_guard_wait[h] = wait
                     still_guarded.add(h)
-                    if wait > self.late_guard_release_after:
+                    if self.late_guard_reroute_after and wait > self.late_guard_reroute_after \
+                            and t >= self.late_guard_next_reroute.get(h, 0):
+                        self.late_guard_next_reroute[h] = t + self.late_guard_reroute_cooldown
+                        if self._reroute_around_segment(env, h, t, s, nx, occupied):
+                            desired[h] = self.plans[h][1][0] if len(self.plans[h]) > 1 else nx
+                            self.late_guard_wait.pop(h, None)
+                            self.late_guard_next_reroute.pop(h, None)
+                            self._bump_debug("late_guard_reroutes")
+                            continue
+                        self._bump_debug("late_guard_reroute_failures")
+                    if self.late_guard_release_after and wait > self.late_guard_release_after:
                         self._bump_debug("late_guard_releases")
                         continue
                 del desired[h]
                 self._bump_debug("late_guard_holds")
-        if self.late_guard_release_after:
+        if self.late_guard_release_after or self.late_guard_reroute_after:
             for h in list(self.late_guard_wait):
                 if h not in still_guarded:
                     del self.late_guard_wait[h]
+                    self.late_guard_next_reroute.pop(h, None)
 
     def _diagnostic_blocked_reason(self, env, h, desired, granted, claimed, occupied, cur_cell, seg_lock):
         ag = env.agents
@@ -924,6 +943,47 @@ class V5Planner:
             self.ptr[h] = 0
             self.stop_at[h] = set()
             self.stopped_at[h] = set()
+            return True
+        return False
+
+    def _reroute_around_segment(self, env, h, t, blocked_segment, current_next, occupied):
+        """Try a clear alternate first step away from a late-guarded segment.
+
+        Unlike releasing a held train into the guarded block, this only commits a new route if
+        the train is sitting at a switch and can immediately leave by a different, unoccupied
+        branch. The guarded segment is heavily penalized so the alternate does not simply loop
+        back into the same head-on conflict.
+        """
+        a = env.agents[h]
+        if a.position is None:
+            return False
+        cp = tuple(a.position)
+        if cp not in self.topo.junctions:
+            return False
+        if self.late_guard_reroutes.get(h, 0) >= self.max_late_guard_reroutes:
+            return False
+
+        cd = int(a.direction) if a.direction is not None else int(a.initial_direction)
+        occ = {tuple(x.position) for x in env.agents
+               if x is not a and x.position is not None}
+        penalty = {c: 1000.0 for c in self.topo.seg_cells[blocked_segment]}
+        k = _kof(a)
+        for route in self.topo.k_routes(cp, cd, {tuple(a.target)}, K=6, load=penalty, lw=1.0):
+            if len(route) < 2:
+                continue
+            rn = route[1][0]
+            if rn == current_next or self.topo.seg_of.get(rn) == blocked_segment:
+                continue
+            if rn in occupied:
+                continue
+            if any(c in occ for (c, _) in route[1:7]):
+                continue
+            self.plans[h] = [(route[j][0], route[j][1], t + j * k, t + j * k + k)
+                             for j in range(len(route))]
+            self.ptr[h] = 0
+            self.stop_at[h] = set()
+            self.stopped_at[h] = set()
+            self.late_guard_reroutes[h] = self.late_guard_reroutes.get(h, 0) + 1
             return True
         return False
 

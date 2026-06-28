@@ -26,6 +26,9 @@ Current V6 default behavior:
 - `exec_fast_first=True`.
 - `late_segment_guard=True`, threshold `30`, to prevent stale-timetable/malfunction
   corridor swaps before opposing trains enter the same single-track segment.
+- `late_guard_reroute_after=200`, cooldown `200`, max `1`, only when
+  `env.get_num_agents() > 60`; this reroutes long-held late-guard trains only
+  when a clear alternate first step exists.
 - `signal_guard=False`, `block_lock=False`, `stuck_replan=False`, `frozen_reroute=False`.
 
 Do not enable old broad knobs by default without comparing against
@@ -98,8 +101,10 @@ Current helper-loader comparison on `L4_s2_a150_ll4_malf360_seed11.pkl`:
 - V6 default: `45/150`, norm `0.682238640`
 - `late_segment_guard=true`: `48/150`, norm `0.686561126`
 - V6 default after enabling `late_segment_guard`: `48/150`, norm `0.686561126`
+- V6 default after density-gated late-guard reroute: `52/150`, norm `0.703267077`
 - `L3_s1_a50_ll3_malf540_seed11.pkl` improved from `32/50` to `41/50`
 - Clean guard `L2_s2_a150_ll4_clean_seed11.pkl` stayed `125/150`, norm `0.885435356`
+- Dense clean guard `L2_s4_a532_ll6_clean_seed11.pkl` stayed `171/532`, norm `0.698347296`
 
 Run the stoppage audit:
 
@@ -112,7 +117,8 @@ Current stoppage decisions:
 - `late_guard_release_after` is ruled out: it removes guard holds but recreates adjacent swaps.
 - `frozen_reroute` is not a safe default: L4 improves `48 -> 50`, but one scenario takes ~`132s`.
 - `release_interval` and `signal_guard` are neutral with the current guard.
-- Next possible direction: reroute only long-held late-guard roots from a switch/clear alternate, instead of releasing them into the guarded segment.
+- Density-gated late-guard reroute is kept: L4 improves `48 -> 52` with clean guards unchanged.
+- Next possible direction: inspect the remaining final `timetable_wait` and `held_by_late_guard` roots after the reroute default.
 
 ## Main Diagnosis So Far
 

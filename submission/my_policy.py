@@ -45,6 +45,9 @@ class MyPolicy(RailEnvPolicy):
         # L3/L4 diagnostics. Clean guards stayed unchanged in local proxy tests.
         self._planner.late_segment_guard = True
         self._planner.late_guard_threshold = 30
+        self._planner.late_guard_reroute_after = 0
+        self._planner.late_guard_reroute_cooldown = 200
+        self._planner.max_late_guard_reroutes = 1
         # V6 throughput gate: directional corridor load helps low-density
         # maps but hurts dense maps, so act_many gates that by agent count.
         # Fast dynamic release stayed broadly positive on the local proxies
@@ -65,6 +68,7 @@ class MyPolicy(RailEnvPolicy):
         env = observations[0]            # MyObservationBuilder hands us the live RailEnv
         low_density = env.get_num_agents() <= self._low_density_agent_cap
         self._planner.dir_weight = 0.5 if low_density else 0.0
+        self._planner.late_guard_reroute_after = 0 if low_density else 200
         self._planner.exec_fast_first = True
         self._planner.signal_guard = False
         # NOTE: signal_guard / block_lock / crit_weight / greedy_advance / release_interval are

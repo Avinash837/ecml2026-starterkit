@@ -1,8 +1,15 @@
 import argparse
 import importlib
-import pickle
+import sys
 from collections import Counter
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from flatland.envs.persistence import RailEnvPersister
+from flatland.envs.rewards import ECML2026Rewards
 
 from eval_harness import score_episode
 
@@ -23,6 +30,10 @@ def _load_class(path):
     return getattr(importlib.import_module(mod_name), cls_name)
 
 
+def _state_name(state):
+    return getattr(state, "name", str(state).split(".")[-1])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario")
@@ -33,8 +44,7 @@ def main():
                     help="Set planner attribute, e.g. --set frozen_reroute=true")
     args = ap.parse_args()
 
-    with Path(args.scenario).open("rb") as fh:
-        env = pickle.load(fh)
+    env, _ = RailEnvPersister.load_new(args.scenario, rewards=ECML2026Rewards())
     policy = _load_class(args.policy)()
     planner = getattr(policy, "_planner", policy)
     for item in args.set:
@@ -42,7 +52,7 @@ def main():
         setattr(planner, name, _parse_value(raw))
 
     result = score_episode(env, policy, seed=args.seed, time_limit=args.time_limit)
-    states = Counter(str(a.state).split(".")[-1] for a in env.agents)
+    states = Counter(_state_name(a.state) for a in env.agents)
     planned_to_target = 0
     plans = getattr(planner, "plans", {})
     for h, plan in plans.items():

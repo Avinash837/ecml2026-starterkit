@@ -7,7 +7,8 @@ repeating the same setup, baseline checks, and conclusions.
 
 - Worktree: `C:\Users\Avinash\Downloads\submission_interlocking\submission_pkg\.branch_inspect_v5_dispatcher`
 - Branch: `v6-dispatcher-multistop`
-- Current V6 baseline commit before new experiments: `fb18be6`
+- Code baseline before late-guard experiments: `fb18be6`
+- Documentation/baseline checkpoint commit: `8b44c4d`
 - Stable parent: `v5-dispatcher-submission`
 - Do not mix this with `v7-multistop-scaleup` unless the user explicitly asks.
 
@@ -23,6 +24,8 @@ Current V6 default behavior:
 - Route-native stop preference is only enabled for very small maps.
 - `dir_weight=0.5` only when `env.get_num_agents() <= 60`, else `0.0`.
 - `exec_fast_first=True`.
+- `late_segment_guard=True`, threshold `30`, to prevent stale-timetable/malfunction
+  corridor swaps before opposing trains enter the same single-track segment.
 - `signal_guard=False`, `block_lock=False`, `stuck_replan=False`, `frozen_reroute=False`.
 
 Do not enable old broad knobs by default without comparing against
@@ -48,6 +51,13 @@ Important files:
 Baseline numbers are stored in:
 
 `diagnostics/baseline_stats.csv`
+
+The `source` column matters:
+
+- `prior_user_trace`: pasted or earlier trace output. Keep it for history.
+- `prior_verified_notes`: verified before this helper existed.
+- `eval_pickle_load_new`: reproducible with `diagnostics/eval_pickle.py`, using
+  `RailEnvPersister.load_new(..., rewards=ECML2026Rewards())`.
 
 Before judging any new patch:
 
@@ -76,6 +86,14 @@ Optional planner toggles can be passed as:
 ```powershell
 python diagnostics/eval_pickle.py /scenarios/proxy/levels/L4_s2_a150_ll4_malf360_seed11.pkl --set frozen_reroute=true
 ```
+
+Current helper-loader comparison on `L4_s2_a150_ll4_malf360_seed11.pkl`:
+
+- V6 default: `45/150`, norm `0.682238640`
+- `late_segment_guard=true`: `48/150`, norm `0.686561126`
+- V6 default after enabling `late_segment_guard`: `48/150`, norm `0.686561126`
+- `L3_s1_a50_ll3_malf540_seed11.pkl` improved from `32/50` to `41/50`
+- Clean guard `L2_s2_a150_ll4_clean_seed11.pkl` stayed `125/150`, norm `0.885435356`
 
 ## Main Diagnosis So Far
 

@@ -211,6 +211,14 @@ class V5Planner:
         # freed after a malfunction clears), grant the FASTER train first. Execution-time
         # complement to the fast-first planning order -- targets the malfunction release order. ---
         self.exec_fast_first = False
+        # --- LATE SEGMENT GUARD (stale-timetable protection): if a train has slipped far behind
+        # its planned slot while inside a single-track segment, hold opposite-direction trains
+        # before they enter that same segment. This targets the malfunction drift failure where a
+        # late train meets an on-time opposing train in a plain corridor; once they become adjacent,
+        # Flatland cannot reverse either train, so repair is usually too late. 0 = off. ---
+        self.late_segment_guard = False
+        self.late_guard_threshold = 30
+        self.debug_counts = {}
         # --- LNS refinement: destroy+repair subsets of the prioritized plan to fit more trains ---
         self.lns_iters = 0         # 0 = off; >0 = run LNS after the initial plan
         self.lns_time = 20.0       # seconds budget for LNS
@@ -584,6 +592,71 @@ class V5Planner:
                 return True
         return False
 
+    def _bump_debug(self, key, n=1):
+        self.debug_counts[key] = self.debug_counts.get(key, 0) + n
+
+    def _lateness(self, env, h, t):
+        """How late h is at its current planned cell, measured against the executor clock."""
+        a = env.agents[h]
+        plan = self.plans.get(h)
+        if not plan or a.position is None:
+            return 0
+        cp = tuple(a.position)
+        i = self.ptr.get(h, 0)
+        while i + 1 < len(plan) and plan[i][0] != cp:
+            i += 1
+        if i >= len(plan) or plan[i][0] != cp:
+            return 0
+        self.ptr[h] = i
+        scheduled_move = plan[i][3] - _kof(a)
+        return max(0, t - scheduled_move)
+
+    def _apply_late_segment_guard(self, env, occupied, desired):
+        """Hold new opposing entries into a segment occupied by a materially late train.
+
+        This is intentionally narrower than block_lock: on-time trains keep using the planned
+        reservations, but a stale train inside a single-track segment temporarily owns that block
+        in its travel direction so another train does not enter nose-to-nose.
+        """
+        topo = self.topo
+        t = env._elapsed_steps
+        late_lock = {}
+        for h, a in enumerate(env.agents):
+            if a.position is None or a.state == TrainState.DONE:
+                continue
+            c = tuple(a.position)
+            s = topo.seg_of.get(c)
+            if s is None:
+                continue
+            malf = getattr(a.malfunction_handler, "malfunction_down_counter", 0)
+            late = self._lateness(env, h, t)
+            if late < self.late_guard_threshold and malf <= 0:
+                continue
+            exit_cell = self._seg_exit(c, int(a.direction))
+            prev = late_lock.get(s)
+            if prev is None:
+                late_lock[s] = exit_cell
+            elif prev != exit_cell:
+                self._bump_debug("late_guard_conflicted_locks")
+
+        if not late_lock:
+            return
+
+        for h in list(desired):
+            a = env.agents[h]
+            hp = tuple(a.position) if a.position is not None else None
+            if hp is None:
+                continue
+            nx = desired[h]
+            s = topo.seg_of.get(nx)
+            if s is None or s not in late_lock or topo.seg_of.get(hp) == s:
+                continue
+            din = self._dir_between(hp, nx)
+            my_exit = self._seg_exit(nx, din) if din is not None else None
+            if my_exit != late_lock[s]:
+                del desired[h]
+                self._bump_debug("late_guard_holds")
+
     def _apply_frozen_reroute(self, env, occupied, desired):
         """Surgical malfunction re-planning: divert trains about to ENTER a corridor that a
         malfunctioning (frozen) train is blocking, onto a clear alternative -> no queue cascade."""
@@ -886,6 +959,8 @@ class V5Planner:
                             desired[h] = plan[i + 1][0]
         if self.frozen_reroute:
             self._apply_frozen_reroute(env, occupied, desired)   # divert around frozen corridors
+        if self.late_segment_guard:
+            self._apply_late_segment_guard(env, occupied, desired)
         seg_lock = self._seg_locks(env) if (self.block_lock or self.meet_pass or self.city_hold) else None
         if self.meet_pass and seg_lock:
             self._apply_meet_pass(env, occupied, seg_lock, desired)

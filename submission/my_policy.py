@@ -39,6 +39,12 @@ class MyPolicy(RailEnvPolicy):
         self._planner.prefer_route_stops = True
         self._planner.prefer_route_stops_agent_cap = 30
         self._planner.prefer_route_stops_bonus = 20
+        # Malfunction drift can make an otherwise conflict-free timetable stale.
+        # A late/frozen train inside a single-track segment temporarily owns that
+        # segment direction, preventing the head-to-head corridor swaps found in
+        # L3/L4 diagnostics. Clean guards stayed unchanged in local proxy tests.
+        self._planner.late_segment_guard = True
+        self._planner.late_guard_threshold = 30
         # V6 throughput gate: directional corridor load helps low-density
         # maps but hurts dense maps, so act_many gates that by agent count.
         # Fast dynamic release stayed broadly positive on the local proxies

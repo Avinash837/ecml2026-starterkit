@@ -218,7 +218,11 @@ class V5Planner:
         # Flatland cannot reverse either train, so repair is usually too late. 0 = off. ---
         self.late_segment_guard = False
         self.late_guard_threshold = 30
+        self.late_guard_release_after = 0
+        self.late_guard_wait = {}
         self.debug_counts = {}
+        self.collect_diagnostics = False
+        self.last_diag = {}
         # --- LNS refinement: destroy+repair subsets of the prioritized plan to fit more trains ---
         self.lns_iters = 0         # 0 = off; >0 = run LNS after the initial plan
         self.lns_time = 20.0       # seconds budget for LNS
@@ -642,6 +646,7 @@ class V5Planner:
         if not late_lock:
             return
 
+        still_guarded = set()
         for h in list(desired):
             a = env.agents[h]
             hp = tuple(a.position) if a.position is not None else None
@@ -654,8 +659,52 @@ class V5Planner:
             din = self._dir_between(hp, nx)
             my_exit = self._seg_exit(nx, din) if din is not None else None
             if my_exit != late_lock[s]:
+                if self.late_guard_release_after:
+                    wait = self.late_guard_wait.get(h, 0) + 1
+                    self.late_guard_wait[h] = wait
+                    still_guarded.add(h)
+                    if wait > self.late_guard_release_after:
+                        self._bump_debug("late_guard_releases")
+                        continue
                 del desired[h]
                 self._bump_debug("late_guard_holds")
+        if self.late_guard_release_after:
+            for h in list(self.late_guard_wait):
+                if h not in still_guarded:
+                    del self.late_guard_wait[h]
+
+    def _diagnostic_blocked_reason(self, env, h, desired, granted, claimed, occupied, cur_cell, seg_lock):
+        ag = env.agents
+        nxt = desired[h]
+        if nxt in claimed:
+            return "blocked_by_claimed_cell", claimed[nxt]
+        occ = occupied.get(nxt)
+        if occ is not None and occ != h and occ not in granted:
+            if desired.get(occ) == cur_cell.get(h):
+                return "blocked_by_adjacent_swap", occ
+            if getattr(ag[occ].malfunction_handler, "malfunction_down_counter", 0) > 0:
+                return "blocked_by_malfunction_train", occ
+            if ag[occ].state == TrainState.STOPPED:
+                return "blocked_by_stopped_train", occ
+            if occ in desired and occ not in granted:
+                return "blocked_by_ungranted_train", occ
+            return "blocked_by_occupied_next", occ
+        if self.signal_guard and ag[h].position is not None and nxt in self.topo.junctions:
+            plan = self.plans.get(h); i = self.ptr.get(h, 0)
+            beyond = plan[i + 2][0] if (plan and i + 2 < len(plan)) else None
+            if beyond is not None:
+                bocc = occupied.get(beyond)
+                if bocc is not None and bocc != h and bocc not in granted and beyond not in claimed:
+                    return "blocked_by_signal_exit", bocc
+        if seg_lock is not None and ag[h].position is not None:
+            s = self.topo.seg_of.get(nxt)
+            hp = cur_cell[h]
+            if s is not None and self.topo.seg_of.get(hp) != s and s in seg_lock:
+                din = self._dir_between(hp, nxt)
+                my_exit = self._seg_exit(nxt, din) if din is not None else None
+                if my_exit != seg_lock[s]:
+                    return "blocked_by_segment_lock", None
+        return "blocked_unclassified", None
 
     def _apply_frozen_reroute(self, env, occupied, desired):
         """Surgical malfunction re-planning: divert trains about to ENTER a corridor that a
@@ -921,6 +970,9 @@ class V5Planner:
                     continue
                 if i + 1 < len(plan) and (self.greedy_advance or t >= plan[i][3] - _kof(a)):
                     desired[h] = plan[i + 1][0]               # scheduled time, or greedy (reactive)
+        diag_initial_desired = dict(desired) if self.collect_diagnostics else None
+        diag_removed = {"frozen_reroute": {}, "late_guard": {}, "city_hold": {}} \
+            if self.collect_diagnostics else None
 
         # chain resolution: grant a move when the next cell is free OR its occupant is also
         # being granted to move out this step -> nose-to-tail chains advance together (the
@@ -958,9 +1010,15 @@ class V5Planner:
                         if i + 1 < len(plan) and t >= plan[i][3] - _kof(a):
                             desired[h] = plan[i + 1][0]
         if self.frozen_reroute:
+            before = dict(desired) if self.collect_diagnostics else None
             self._apply_frozen_reroute(env, occupied, desired)   # divert around frozen corridors
+            if self.collect_diagnostics:
+                diag_removed["frozen_reroute"] = {h: before[h] for h in before if h not in desired}
         if self.late_segment_guard:
+            before = dict(desired) if self.collect_diagnostics else None
             self._apply_late_segment_guard(env, occupied, desired)
+            if self.collect_diagnostics:
+                diag_removed["late_guard"] = {h: before[h] for h in before if h not in desired}
         seg_lock = self._seg_locks(env) if (self.block_lock or self.meet_pass or self.city_hold) else None
         if self.meet_pass and seg_lock:
             self._apply_meet_pass(env, occupied, seg_lock, desired)
@@ -969,6 +1027,8 @@ class V5Planner:
             for h in list(desired):
                 hp = cur_cell.get(h)
                 if hp in self.safe_cells and self._contested_ahead(h, seg_lock):
+                    if self.collect_diagnostics:
+                        diag_removed["city_hold"][h] = desired[h]
                     del desired[h]                        # wait on the platform (safe siding)
         granted = {}
         claimed = {}
@@ -1010,6 +1070,25 @@ class V5Planner:
                 claimed[nxt] = h
                 changed = True
 
+        if self.collect_diagnostics:
+            blocked = {}
+            for h in handles:
+                if h in desired and h not in granted:
+                    reason, blocker = self._diagnostic_blocked_reason(
+                        env, h, desired, granted, claimed, occupied, cur_cell, seg_lock)
+                    blocked[h] = (reason, blocker, desired[h])
+            self.last_diag = {
+                "t": t,
+                "cur_cell": dict(cur_cell),
+                "occupied": dict(occupied),
+                "desired_initial": diag_initial_desired,
+                "desired": dict(desired),
+                "removed": diag_removed,
+                "granted": dict(granted),
+                "blocked": blocked,
+                "service_stops": set(),
+            }
+
         if self.stuck_replan:                       # track how long each train has been blocked
             for h in handles:
                 if ag[h].position is not None and h in desired and h not in granted:
@@ -1044,6 +1123,8 @@ class V5Planner:
                     i = self.ptr.get(h)
                     if i in self.stop_at.get(h, set()) \
                             and i not in self.stopped_at.get(h, set()):
+                        if self.collect_diagnostics:
+                            self.last_diag.setdefault("service_stops", set()).add(h)
                         self.stopped_at.setdefault(h, set()).add(i)
                     actions[h] = STOP
                 else:

@@ -52,6 +52,12 @@ Baseline numbers are stored in:
 
 `diagnostics/baseline_stats.csv`
 
+Stoppage-specific experiments are stored in:
+
+- `diagnostics/stoppage_experiments.csv`
+- `diagnostics/stoppage_audit_summary.md`
+- audit CSVs under `diagnostics/runs/`
+
 The `source` column matters:
 
 - `prior_user_trace`: pasted or earlier trace output. Keep it for history.
@@ -94,6 +100,19 @@ Current helper-loader comparison on `L4_s2_a150_ll4_malf360_seed11.pkl`:
 - V6 default after enabling `late_segment_guard`: `48/150`, norm `0.686561126`
 - `L3_s1_a50_ll3_malf540_seed11.pkl` improved from `32/50` to `41/50`
 - Clean guard `L2_s2_a150_ll4_clean_seed11.pkl` stayed `125/150`, norm `0.885435356`
+
+Run the stoppage audit:
+
+```powershell
+python diagnostics/stoppage_audit.py /scenarios/proxy/levels/L4_s2_a150_ll4_malf360_seed11.pkl --out diagnostics/runs/L4_s2_v6_guard
+```
+
+Current stoppage decisions:
+
+- `late_guard_release_after` is ruled out: it removes guard holds but recreates adjacent swaps.
+- `frozen_reroute` is not a safe default: L4 improves `48 -> 50`, but one scenario takes ~`132s`.
+- `release_interval` and `signal_guard` are neutral with the current guard.
+- Next possible direction: reroute only long-held late-guard roots from a switch/clear alternate, instead of releasing them into the guarded segment.
 
 ## Main Diagnosis So Far
 

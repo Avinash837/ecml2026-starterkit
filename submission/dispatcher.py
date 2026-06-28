@@ -93,6 +93,12 @@ class V5Planner:
         # the dense completion-first behavior that made V5 stable.
         self.opportunistic_stops = True
         self.opportunistic_stop_agent_cap = 60
+        # Stop-aware K-route choice is safe only on small maps. Explicit
+        # stop-detour routes were tested and rejected because they cost too
+        # many completions even when the geometric detour looked short.
+        self.prefer_route_stops = False
+        self.prefer_route_stops_agent_cap = 30
+        self.prefer_route_stops_bonus = 20
         # buf: extra following-spacing steps per cell. Tested 0 vs 1 -> no difference at high
         # density (the wall is the prioritized planner, not packing), so keep 0 (max throughput).
         self.buf = 0
@@ -389,19 +395,23 @@ class V5Planner:
         # On-map trains can't delay (they're already moving), so only off-map trains stagger.
         delays = [0, 30, 60, 120, 240, 480, 960] if not on_map else [0]
         best = None  # (score, plan, adds, parks, last_cell, last_enter, stop_set)
+        prefer_stops = self.prefer_route_stops and env.get_num_agents() <= self.prefer_route_stops_agent_cap
         for route, stop_set in cands:
             for dl in delays:
                 t0 = base + dl
                 if t0 > horizon:
                     break
                 plan, adds, reached, lc, le = self._build(route, stop_set, t0, k, res, horizon)
-                score = (reached, -plan[-1][2] if reached else len(plan) - 10 ** 6)
+                if reached and prefer_stops:
+                    score = (reached, -plan[-1][2] + self.prefer_route_stops_bonus * len(stop_set))
+                else:
+                    score = (reached, -plan[-1][2] if reached else len(plan) - 10 ** 6)
                 cand = (score, plan, adds, not reached, lc, le, set(stop_set))
                 if best is None or score > best[0]:
                     best = cand
                 if reached:
                     break          # earliest departure that completes this route
-            if best is not None and best[0][0]:
+            if best is not None and best[0][0] and not prefer_stops:
                 break              # a route completed; take it
 
         _, plan, adds, parks, last_cell, last_enter, chosen_stops = best

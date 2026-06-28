@@ -36,6 +36,9 @@ class MyPolicy(RailEnvPolicy):
         # low-density intermediate stops that already lie on the chosen route.
         self._planner.opportunistic_stops = True
         self._planner.opportunistic_stop_agent_cap = 60
+        self._planner.prefer_route_stops = True
+        self._planner.prefer_route_stops_agent_cap = 30
+        self._planner.prefer_route_stops_bonus = 20
         # V6 throughput gate: directional corridor load helps low-density
         # maps but hurts dense maps, so act_many gates that by agent count.
         # Fast dynamic release stayed broadly positive on the local proxies

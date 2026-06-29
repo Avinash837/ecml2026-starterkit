@@ -19,6 +19,13 @@ Two continuous levers come from this workload:
   quantized to 100-step timetable buckets. Light clean cases release at `500`;
   heavier clean cases release at `400`.
 
+A third lever is enabled only on clean scenarios:
+
+- Surgical stuck replan: after a train has been blocked for 40 steps, replan only
+  that train from its current position while leaving the rest of the timetable
+  intact. This targets the live stopped-chain layer without activating on
+  malfunction scenarios, where the same lever hurt the level-4 proxy.
+
 This is not keyed to `level_1`, `level_2`, or exact agent counts. It is a small
 model of congestion pressure and available horizon.
 
@@ -30,7 +37,7 @@ Key proxy results:
 
 - `L2_s2_a150_ll4_clean_seed11`: `125/150 -> 150/150`
 - `L1_s4_a210_ll6_clean_seed11`: `118/210 -> 210/210`
-- `L2_s4_a532_ll6_clean_seed11`: `171/532 -> 263/532`
+- `L2_s4_a532_ll6_clean_seed11`: `171/532 -> 294/532`
 - `L4_s2_a150_ll4_malf360_seed11`: unchanged at `52/150`
 
 ## Ruled Out
@@ -39,3 +46,8 @@ Naive SIPP/time-space repair was tested as an initial and release-time repair.
 It added more planned trains but worsened execution by creating stopped chains.
 The useful mechanism is route-load shadow pricing plus workload-timed late
 admission, not simply forcing more trains into the plan.
+
+Nearby-grid route pressure and hard grid-admission gates were also tested on
+2026-06-29. Both were removed: the pressure model hurt the 150/210 clean cases,
+and the hard gate hurt the 532 stress case. See
+`diagnostics/locking_model_experiments.md`.

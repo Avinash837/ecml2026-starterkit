@@ -73,6 +73,8 @@ class MyPolicy(RailEnvPolicy):
             and int(getattr(mpd, "max_duration", 0) or 0) == 0
         )
         self._planner.clean_completion_model = clean_env
+        self._planner.stuck_replan = clean_env
+        self._planner.stuck_thresh = 40
         self._planner.dir_weight = 0.5 if low_density else 0.0
         self._planner.late_guard_reroute_after = 0 if low_density else 200
         self._planner.exec_fast_first = True

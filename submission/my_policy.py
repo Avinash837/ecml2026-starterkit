@@ -67,6 +67,12 @@ class MyPolicy(RailEnvPolicy):
     def act_many(self, handles: List[int], observations: List[Any], **kwargs) -> Dict[int, RailEnvActions]:
         env = observations[0]            # MyObservationBuilder hands us the live RailEnv
         low_density = env.get_num_agents() <= self._low_density_agent_cap
+        mpd = getattr(env, "malfunction_process_data", None)
+        clean_env = (
+            float(getattr(mpd, "malfunction_rate", 0.0) or 0.0) <= 1e-8
+            and int(getattr(mpd, "max_duration", 0) or 0) == 0
+        )
+        self._planner.clean_completion_model = clean_env
         self._planner.dir_weight = 0.5 if low_density else 0.0
         self._planner.late_guard_reroute_after = 0 if low_density else 200
         self._planner.exec_fast_first = True

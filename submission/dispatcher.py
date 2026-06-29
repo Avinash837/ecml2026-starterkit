@@ -232,10 +232,42 @@ class V5Planner:
         self.lns_iters = 0         # 0 = off; >0 = run LNS after the initial plan
         self.lns_time = 20.0       # seconds budget for LNS
         self.lns_nbhd = 25         # neighborhood size (agents re-planned jointly)
+        # --- Clean completion model: derive route shadow price and late
+        # admission cadence from workload = train-service demand / horizon.
+        # This is intentionally not keyed to level IDs or agent counts.
+        self.clean_completion_model = False
+        self.clean_workload = 0.0
+        self.clean_load_neutral = 0.14
+        self.clean_load_gain = 5.0
+        self.clean_load_cap = 0.2
+        self.clean_release_low = 0.105
+        self.clean_release_gain = 1200.0
+        self.clean_release_min = 400
+        self.clean_release_max = 500
         # --- RL-tuned priority hook: callable (env, topo, h) -> score (low = planned first).
         # Set by the ES trainer; replaces the slack heuristic for the planning ORDER while v5
         # still does routing + deadlock-free reservations. None = use the slack heuristic. ---
         self.priority_fn = None
+
+    def _apply_clean_completion_model(self, env):
+        n = max(1, env.get_num_agents())
+        horizon = max(1, int(env._max_episode_steps))
+        avg_waypoints = sum(len(a.waypoints) for a in env.agents) / n
+        workload = (n * avg_waypoints) / horizon
+        self.clean_workload = workload
+
+        load = self.clean_load_gain * max(0.0, workload - self.clean_load_neutral)
+        self.load_weight = min(self.clean_load_cap, max(0.0, load))
+
+        # The same workload controls late admission: light workloads do not need
+        # a release valve; heavier workloads release closer to 400 ticks.
+        if workload <= 0:
+            self.release_interval = 0
+        else:
+            release = self.clean_release_max - self.clean_release_gain * max(0.0, workload - self.clean_release_low)
+            release = int(round(release / 100.0) * 100)
+            release = max(self.clean_release_min, min(self.clean_release_max, release))
+            self.release_interval = release
 
     @staticmethod
     def _start(a):
@@ -991,6 +1023,8 @@ class V5Planner:
         env = envs[0]
         ag = env.agents
         t = env._elapsed_steps
+        if self.clean_completion_model and not self.ready:
+            self._apply_clean_completion_model(env)
         if not self.ready:
             self._plan_all(env, t_now=t)
         elif self.replan_interval > 0 and t - self.last_replan >= self.replan_interval \

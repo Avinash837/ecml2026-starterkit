@@ -1,0 +1,13 @@
+date,branch,variant,scenario_file,condition,agents,line_length,complete,total_agents,normalized_reward,planned_to_target,no_plan,states,wall_s,notes
+2026-06-28,codex/clean-complete-v8,v6_baseline,L0_s4_a28_ll6_clean_seed11.pkl,clean,28,6,28,28,0.998901775,28,0,DONE=28,7.40,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model,L0_s4_a28_ll6_clean_seed11.pkl,clean,28,6,28,28,0.998901775,28,0,DONE=28,4.80,small clean preserved
+2026-06-28,codex/clean-complete-v8,v6_baseline,L1_s1_a50_ll3_clean_seed11.pkl,clean,50,3,50,50,0.999709049,50,0,DONE=50,11.30,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model,L1_s1_a50_ll3_clean_seed11.pkl,clean,50,3,50,50,0.999709049,50,0,DONE=50,6.85,small clean preserved
+2026-06-28,codex/clean-complete-v8,v6_baseline,L2_s2_a150_ll4_clean_seed11.pkl,clean,150,4,125,150,0.885435356,125,25,DONE=125;READY_TO_DEPART=25,38.74,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model,L2_s2_a150_ll4_clean_seed11.pkl,clean,150,4,150,150,0.998061566,150,0,DONE=150,30.30,workload model fixes clean 150 no-plan trains
+2026-06-28,codex/clean-complete-v8,v6_baseline,L1_s4_a210_ll6_clean_seed11.pkl,clean,210,6,118,210,0.837997998,177,33,DONE=118;READY_TO_DEPART=33;STOPPED=59,75.45,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model,L1_s4_a210_ll6_clean_seed11.pkl,clean,210,6,210,210,0.998575004,210,0,DONE=210,40.79,workload model fixes clean 210 stopped/no-plan cascade
+2026-06-28,codex/clean-complete-v8,v6_baseline,L2_s4_a532_ll6_clean_seed11.pkl,clean,532,6,171,532,0.698347296,339,193,STOPPED=161;READY_TO_DEPART=200;DONE=171,137.26,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model,L2_s4_a532_ll6_clean_seed11.pkl,clean,532,6,263,532,0.763103964,356,176,STOPPED=88;READY_TO_DEPART=181;DONE=263,412.63,stress improves but still far from all-complete
+2026-06-28,codex/clean-complete-v8,v6_baseline,L4_s2_a150_ll4_malf360_seed11.pkl,malfunction,150,4,52,150,0.703267077,125,25,DONE=52;MALFUNCTION=13;STOPPED=58;READY_TO_DEPART=24;MALFUNCTION_OFF_MAP=3,48.23,baseline from validation_matrix_2026-06-28
+2026-06-28,codex/clean-complete-v8,clean_completion_model_default,L4_s2_a150_ll4_malf360_seed11.pkl,malfunction,150,4,52,150,0.703267077,125,25,DONE=52;MALFUNCTION=13;STOPPED=58;READY_TO_DEPART=24;MALFUNCTION_OFF_MAP=3,34.15,malfunction unchanged because model only activates for clean malfunction_process_data
